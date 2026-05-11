@@ -13,7 +13,7 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   timeout: 90_000,
   expect: {
-    timeout: defaultTimeoutMs
+    timeout: defaultTimeoutMs,
   },
   reporter: [["html", { open: "never" }], ["list"]],
   use: {
@@ -22,7 +22,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
     actionTimeout: defaultTimeoutMs,
-    navigationTimeout: defaultTimeoutMs
+    navigationTimeout: defaultTimeoutMs,
+      launchOptions: {
+        slowMo: 500
+      }
   },
   projects: [
     {
