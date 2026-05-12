@@ -37,5 +37,9 @@ test('Dashboard Login @sanity', async ({ page }) => {
   if (await understandBtn.isVisible()) {
     await understandBtn.click();
   }
-await page.waitForTimeout(10000);
+await expect(
+  page.getByRole('button', { name: 'All Leads' })
+).toBeVisible();
+
+await page.waitForTimeout(5000);
 });
