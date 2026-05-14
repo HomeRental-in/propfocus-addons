@@ -41,6 +41,7 @@ interface MicrositeResponseBody {           // interface defining the expected s
 interface ExpectedFields {                  // interface defining the expected fields that can be validated in the response message, used for positive test cases to ensure correct parsing of buyer name and project name
   buyerName?: string;
   projectName?: string;
+  buyerId?: string;
 }
 
 interface PositiveCase {                    // interface defining the structure of a positive test case, including the name of the test case, the message body to be sent in the request, an optional flag to validate RNR status, and optional expected fields for validation in the response
