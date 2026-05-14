@@ -1,948 +1,450 @@
-import { test, expect } from '@playwright/test';
+import {
+  test,
+  expect,
+  APIRequestContext
+} from '@playwright/test';
 
-test('Microsite Generation @sanity', async ({ request }) => {
+// ======================================================
+// CONSTANTS
+// Use environment variables in CI; fall back to dev
+// defaults locally so no secrets are hardcoded.
+// ======================================================
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
+const API_URL =
+  process.env.API_URL ??
+  'https://dev.propfocus.in/api/whatsapp-webhook';
+
+// Phone numbers are stored as strings to preserve
+// leading zeros and avoid accidental arithmetic.
+const PHONE = {
+  ACTIVE:    process.env.TEST_PHONE             ?? '8888888888',
+  INACTIVE:  process.env.INACTIVE_BROKER_PHONE  ?? '7777777777',
+  SUSPENDED: process.env.SUSPENDED_ORG_PHONE    ?? '6666666666',
+} as const;
+
+// ======================================================
+// TYPES
+// ======================================================
+
+interface MicrositeResponseBody {
+  success:      boolean;
+  micrositeUrl: string | null;
+  buyerName?:   string;
+  buyerId?:     string;
+  projectName?: string;
+  rnr?:         boolean;
+}
+
+interface PositiveCase {
+  name:          string;
+  body:          string;
+  validateRNR?:  boolean;
+  expectedFields?: Partial<Pick<
+    MicrositeResponseBody,
+    'buyerName' | 'buyerId' | 'projectName'
+  >>;
+}
+
+interface NegativeCase {
+  name: string;
+  body: string;
+}
+
+// ======================================================
+// HELPER
+// ======================================================
+
+async function sendMicrositeRequest(
+  request:     APIRequestContext,
+  messageBody: string,
+  phone:       string = PHONE.ACTIVE
+): Promise<{ response: Awaited<ReturnType<APIRequestContext['post']>>; responseBody: MicrositeResponseBody }> {
+
+  const response = await request.post(API_URL, {
+    data: {
+      event: 'message',
       data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Arhan Sk B123 needs brochure for Aamrut'
-        }
+        from: phone,
+        body: messageBody
       }
     }
-  );
-
-  // Verify status code
-  expect(response.status()).toBe(200);
-
-  // Parse response JSON
-  const responseBody = await response.json();
-
-  // Verify success
-  expect(responseBody.success).toBe(true);
-
-  // Verify microsite URL exists
-//   expect(responseBody.micrositeURL).toBeTruthy();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with ALL CAPS message @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'ARHAN SK B123 NEEDS BROCHURE FOR AAMRUT'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with different sentence structure @sanity', async ({ request }) => {
-    const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'For Abhee Tranquila, generate for Harsha with ID 1234'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with Mr prefix @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Mr. Arhan B123 needs brochure for Aamrut'
-        }
-      }
-    }
-  );
+  });
 
   expect(response.status()).toBe(200);
 
-  const responseBody = await response.json();
+  const responseBody: MicrositeResponseBody =
+    await response.json();
 
-  expect(responseBody.success).toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
+  console.log(`\nPhone      : ${phone}`);
+  console.log(`Request    : ${messageBody}`);
   console.log(JSON.stringify(responseBody, null, 2));
 
-});
+  return { response, responseBody };
+}
 
-test('Microsite Generation with Mr name format @sanity', async ({ request }) => {
+// ======================================================
+// SHARED ASSERTIONS
+// Centralised so every callsite stays DRY.
+// ======================================================
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Mr Arhan Sk B123 needs brochure for Aamrut'
-        }
-      }
+function assertSuccess(body: MicrositeResponseBody) {
+  expect(body.success).toBe(true);
+  expect(body.micrositeUrl).toBeTruthy();
+}
+
+function assertFailure(body: MicrositeResponseBody) {
+  expect(body.success).not.toBe(true);
+  expect(body.micrositeUrl).toBeFalsy();
+}
+
+function assertRNR(body: MicrositeResponseBody) {
+  // RNR flag must be explicitly true — a missing field
+  // or false should fail the assertion.
+  expect(body.rnr).toBe(true);
+}
+
+function assertExpectedFields(
+  body:   MicrositeResponseBody,
+  fields: PositiveCase['expectedFields']
+) {
+  if (!fields) return;
+
+  for (const [key, value] of Object.entries(fields) as [
+    keyof typeof fields,
+    string
+  ][]) {
+    expect(
+      body[key]?.toLowerCase()
+    ).toContain(value.toLowerCase());
+  }
+}
+
+// ======================================================
+// POSITIVE TEST CASES
+// ======================================================
+
+const positiveCases: PositiveCase[] = [
+
+  {
+    name: 'Valid Input',
+    body: 'Harsha with ID 9121 for Abhee Tranquila',
+    expectedFields: {
+      buyerName:   'Harsha',
+      buyerId:     '9121',
+      projectName: 'Abhee Tranquila'
     }
-  );
+  },
 
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-});
-
-test('Microsite Generation with Dr prefix @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Dr Arhan B123 needs brochure for Aamrut'
-        }
-      }
+  {
+    name: 'ALL CAPS Input',
+    body: 'HARSHA WITH ID 9121 FOR ABHEE TRANQUILA',
+    expectedFields: {
+      buyerName:   'Harsha',
+      buyerId:     '9121',
+      projectName: 'Abhee Tranquila'
     }
-  );
+  },
 
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-});
-
-test('Microsite Generation with Shri prefix @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Shri Arhan B123 needs brochure for Aamrut'
-        }
-      }
+  {
+    name: 'Mixed Case Input',
+    body: 'HaRsHa WiTh Id 9121 FoR AbHeE TrAnQuIlA',
+    expectedFields: {
+      buyerName:   'Harsha',
+      buyerId:     '9121',
+      projectName: 'Abhee Tranquila'
     }
-  );
+  },
 
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-});
-
-test('Microsite Generation with partial name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha interested at Sampada'
-        }
-      }
+  {
+    name:        'RNR Status',
+    body:        'Harsha with ID 9121 for Abhee Tranquila RNR',
+    validateRNR: true,
+    expectedFields: {
+      buyerName:   'Harsha',
+      buyerId:     '9121',
+      projectName: 'Abhee Tranquila'
     }
-  );
+  },
 
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with multiple project options @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID 2345 for all projects'
-        }
-      }
+  {
+    name: 'RNR mixed case',
+    body: 'Harsha with ID 9121 for Abhee Tranquila rNr',
+    validateRNR: true,
+    expectedFields: {
+      buyerName:   'Harsha',
+      buyerId:     '9121',
+      projectName: 'Abhee Tranquila'
     }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with wrong spelling @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha for Abhee Tranqula with ID 2345'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with half project name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha A343 for Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with for phases @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID K987 for KNS Samooha Phase 3'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with for partial phase name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID A781 for Ananta'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with explicit phase number @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha for Ananta Phase 5'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-    expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-
-test('Microsite Generation with abbreviated phase name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID 1242 for Ananta P1'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with codename short form @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha for KNS'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with mixed case input @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'HaRsHa with Id I891 FoR AbHeE TrAnQuIlA'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with explicit generate request @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Please generate for Harsha with ID B123 in Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with phone number and interest statement @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: '9650355568 Aakash is interested in Abhee Aaria'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-});
-
-test('Microsite Generation with multiple customer requests @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha for Abhee Tranquila and Raj for KNS Sampada'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  expect(responseBody.success).toBe(true);
-
-  console.log(JSON.stringify(responseBody, null, 2));
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test('Microsite Generation with invalid project name @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha for XYZ Project'
-        }
-      }
-    }
-  );
-
-  // Verify API response received
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Verify microsite should NOT generate for invalid project
-  expect(responseBody.success).not.toBe(true);
-  expect(responseBody.micrositeUrl).toBeFalsy();
-
-});
-
-test('Microsite Generation with missing customer name @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'for Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  // Verify API response received
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Verify request should not generate valid microsite
-  expect(responseBody.success).not.toBe(true);
-  expect(responseBody.micrositeUrl).toBeFalsy();
-});
-
-test('Microsite Generation with numeric customer name @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: '12345 for Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Invalid customer name should not generate microsite
-  expect(responseBody.success).not.toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeFalsy();
-});
-
-test('Microsite Generation with special characters only @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: '@@@ ### $$$'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Invalid format should not generate microsite
-  expect(responseBody.success).not.toBe(true);
-
-  expect(responseBody.micrositeUrl).toBeFalsy();
-});
-
-test('Microsite Generation with multiple projects and customer ID @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha B123 for Abhee Tranquila and KNS Sampada'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-
-});
-
-test('Microsite Generation with multiple farm project names @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha B123 for KNS Sampada, Samruddhi Farms, Sampada, Samooha, Abhirudhi'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-
-});
-
-test('Microsite Generation with incomplete customer ID format @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID for Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Missing actual ID value should not generate valid microsite
-  expect(responseBody.success).not.toBe(true);
-
-});
-
-test('Microsite Generation without valid buyer ID @regression', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID @14@ for Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  // Microsite should not generate without valid buyer ID
-  expect(responseBody.success).not.toBe(true);
-
-});
-
-test('Microsite Generation with multiple spaces in customer name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Aakash                    Bhatnagar with ID A344 for Abhee Aria'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-
-});
-
-test('Microsite Generation with multi-line input @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: `Rahul Sharma
+  },
+
+  {
+    name: 'Mr Prefix',
+    body: 'Mr Harsha with ID 9121 for Abhee Tranquila',
+    expectedFields: { buyerName: 'Harsha', buyerId: '9121' }
+  },
+
+  {
+    name: 'Dr Prefix',
+    body: 'Dr Harsha with ID 9121 for Abhee Tranquila',
+    expectedFields: { buyerName: 'Harsha', buyerId: '9121' }
+  },
+
+  {
+    name: 'Shri Prefix',
+    body: 'Shri Harsha with ID 9121 for Abhee Tranquila',
+    expectedFields: { buyerName: 'Harsha', buyerId: '9121' }
+  },
+
+ {
+  name: 'Minor Wrong Spelling',
+  body: 'Harsha with ID 9121 for Abhee Tranqula',  // one char off — should still match
+},
+
+  {
+    name: 'Partial Project Name',
+    body: 'Harsha with ID 9121 for Tranquila',
+    expectedFields: { projectName: 'Tranquila' }
+  },
+
+  {
+    name: 'KNS Short Form',
+    body: 'Harsha with ID 9121 for KNS',
+    expectedFields: { projectName: 'KNS' }
+  },
+
+  {
+    name: 'Multiple Projects',
+    body: 'Harsha with ID 9121 for Abhee Tranquila and KNS Sampada'
+  },
+
+  {
+    name: 'Multiple Farm Projects',
+    body: 'Harsha with ID 9121 for Samruddhi Farms, Sampada, Samooha'
+  },
+
+  {
+    name: 'Dash Separator',
+    body: 'Harsha with ID 9121 - Abhee Tranquila',
+    expectedFields: { buyerName: 'Harsha', buyerId: '9121' }
+  },
+
+  {
+    name: 'Mixed Delimiters',
+    body: 'Harsha - Abhee / Tranquila'
+  },
+
+  {
+    name: 'Emoji Input',
+    body: '🏠 Harsha with ID 9121 for Abhee Tranquila',
+    expectedFields: { buyerName: 'Harsha', buyerId: '9121' }
+  },
+
+  {
+    name: 'Apostrophe Name',
+    body: "O'Brien with ID 9121 for Abhee Tranquila",
+    expectedFields: { buyerName: "O'Brien", buyerId: '9121' }
+  },
+
+  {
+    name: 'Accented Characters',
+    body: 'José with ID 9121 for Abhee Tranquila',
+    expectedFields: { buyerName: 'José', buyerId: '9121' }
+  },
+
+  {
+    name: 'Multiple Spaces',
+    body: 'Aakash          Bhatnagar with ID A344 for Abhee Aria',
+    expectedFields: { buyerName: 'Aakash Bhatnagar', buyerId: 'A344' }
+  },
+
+  {
+    name: 'Multi-line Input',
+    body:
+`Rahul Sharma
 Abhee Tranquila
-KNS Sampada`
-        }
+KNS Sampada`,
+    expectedFields: { buyerName: 'Rahul Sharma' }
+  }
+
+];
+
+// ======================================================
+// NEGATIVE TEST CASES
+// ======================================================
+
+const negativeCases: NegativeCase[] = [
+
+  {
+    name: 'Invalid Project Name',
+    body: 'Harsha with ID 9121 for XYZ Project'
+  },
+
+  {
+    name: 'Missing Buyer Name',
+    body: 'with ID 9121 for Abhee Tranquila'
+  },
+
+  {
+    name: 'Numeric Buyer Name',
+    body: '12345 for Abhee Tranquila'
+  },
+
+  {
+    name: 'Special Characters Only',
+    body: '@@@ ### $$$'
+  },
+
+  {
+    name: 'Incomplete Buyer ID',
+    body: 'Harsha with ID for Abhee Tranquila'
+  },
+
+  {
+    name: 'Invalid Buyer ID',
+    body: 'Harsha with ID @@@ for Abhee Tranquila'
+  },
+  {
+  name: 'Severely Wrong Spelling',
+  body: 'Harsha with ID 9121 for Abhe Trnqla'  // too many chars off — should not match
+},
+
+];
+
+// ======================================================
+// POSITIVE TEST EXECUTION
+// ======================================================
+
+for (const testData of positiveCases) {
+
+  test(
+    `Microsite Positive - ${testData.name} @sanity`,
+    async ({ request }) => {
+
+      const { responseBody } =
+        await sendMicrositeRequest(request, testData.body);
+
+      // 1. Success shape
+      assertSuccess(responseBody);
+
+      // 2. RNR flag (only when case declares it)
+      if (testData.validateRNR) {
+        assertRNR(responseBody);
       }
+
+      // 3. Field-level validation
+      assertExpectedFields(responseBody, testData.expectedFields);
+
     }
   );
 
-  expect(response.status()).toBe(200);
+}
 
-  const responseBody = await response.json();
+// ======================================================
+// NEGATIVE TEST EXECUTION
+// ======================================================
 
-  console.log(JSON.stringify(responseBody, null, 2));
+for (const testData of negativeCases) {
 
-  expect(responseBody.success).toBe(true);
+  test(
+    `Microsite Negative - ${testData.name} @regression`,
+    async ({ request }) => {
 
-});
+      const { responseBody } =
+        await sendMicrositeRequest(request, testData.body);
 
-test('Microsite Generation with dash separated input @sanity', async ({ request }) => {
+      assertFailure(responseBody);
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha with ID A143 - Abhee Tranquila'
-        }
-      }
     }
   );
 
-  expect(response.status()).toBe(200);
+}
 
-  const responseBody = await response.json();
+// ======================================================
+// MICROSITE REUSE FLOW
+// Same input must return the identical URL both times.
+// Both calls must individually succeed before comparing
+// URLs — otherwise two undefined values would falsely
+// match and hide a real failure.
+// ======================================================
 
-  console.log(JSON.stringify(responseBody, null, 2));
+test(
+  'Microsite Reuse Flow @regression',
+  async ({ request }) => {
 
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
+    const BODY = 'Harsha with ID 9121 for Abhee Tranquila';
 
-});
+    const first  = await sendMicrositeRequest(request, BODY);
+    const second = await sendMicrositeRequest(request, BODY);
 
-test('Microsite Generation with buyer ID and dash separator @sanity', async ({ request }) => {
+    // Guard: both calls must succeed independently
+    assertSuccess(first.responseBody);
+    assertSuccess(second.responseBody);
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha - B123 - Abhee Tranquila'
-        }
-      }
-    }
-  );
+    // Idempotency: same input → same URL
+    expect(first.responseBody.micrositeUrl)
+      .toBe(second.responseBody.micrositeUrl);
 
-  expect(response.status()).toBe(200);
+  }
+);
 
-  const responseBody = await response.json();
+// ======================================================
+// PERFORMANCE TEST
+// ======================================================
 
-  console.log(JSON.stringify(responseBody, null, 2));
+test(
+  'Microsite API Performance @performance',
+  async ({ request }) => {
 
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
+    const start = Date.now();
 
-});
+    const { responseBody } = await sendMicrositeRequest(
+      request,
+      'Harsha with ID 9121 for Abhee Tranquila'
+    );
 
-test('Microsite Generation with mixed delimiters @sanity', async ({ request }) => {
+    const ms = Date.now() - start;
+    console.log(`Response time: ${ms} ms`);
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'Harsha - Abhee / Tranquila'
-        }
-      }
-    }
-  );
+    assertSuccess(responseBody);
+    expect(ms).toBeLessThan(5000);
 
-  expect(response.status()).toBe(200);
+  }
+);
 
-  const responseBody = await response.json();
+// ======================================================
+// SUSPENDED ORGANIZATION
+// ======================================================
 
-  console.log(JSON.stringify(responseBody, null, 2));
+test(
+  'Suspended Organization Validation @regression',
+  async ({ request }) => {
 
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
+    const { responseBody } = await sendMicrositeRequest(
+      request,
+      'Harsha with ID 9121 for Abhee Tranquila',
+      PHONE.SUSPENDED
+    );
 
-});
+    assertFailure(responseBody);
 
-test('Microsite Generation with emoji and special characters @sanity', async ({ request }) => {
+  }
+);
 
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: '🏠 Harsha with ID k131 for Abhee Tranquila'
-        }
-      }
-    }
-  );
+// ======================================================
+// INACTIVE BROKER
+// ======================================================
 
-  expect(response.status()).toBe(200);
+test(
+  'Inactive Broker Validation @regression',
+  async ({ request }) => {
 
-  const responseBody = await response.json();
+    const { responseBody } = await sendMicrositeRequest(
+      request,
+      'Harsha with ID 9121 for Abhee Tranquila',
+      PHONE.INACTIVE
+    );
 
-  console.log(JSON.stringify(responseBody, null, 2));
+    assertFailure(responseBody);
 
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
-});
-
-test('Microsite Generation with apostrophe in customer name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: "O'Brien with ID A143 for Abhee Tranquila"
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
-
-test.only('Microsite Generation with accented characters in customer name @sanity', async ({ request }) => {
-
-  const response = await request.post(
-    'https://dev.propfocus.in/api/whatsapp-webhook',
-    {
-      data: {
-        event: 'message',
-        data: {
-          from: '+918374095506',
-          body: 'José with ID A143 for Abhee Tranquila'
-        }
-      }
-    }
-  );
-
-  expect(response.status()).toBe(200);
-
-  const responseBody = await response.json();
-
-  console.log(JSON.stringify(responseBody, null, 2));
-
-  expect(responseBody.success).toBe(true);
-  expect(responseBody.micrositeUrl).toBeTruthy();
-
-});
+  }
+);
