@@ -1,28 +1,28 @@
-import {
-  test,
-  expect,
-  APIRequestContext
+import {                       //imports the necessary functions and types from the Playwright testing library
+  test,                        // test: function to define test cases
+  expect,                      // expect: function for assertions/validations
+  APIRequestContext            // APIRequestContext: type for making API requests within tests
 } from '@playwright/test';
 
 // ======================================================
 // CONSTANTS
 // ======================================================
 
-const API_URL =
+const API_URL =                                   // API endpoint for the microsite generation, can be set via environment variable or defaults to a specific URL
   process.env.API_URL ??
-  'https://dev.propfocus.in/api/whatsapp-webhook';
+  'https://dev.propfocus.in/api/whatsapp-webhook';    // The URL to which the test will send POST requests to trigger microsite generation
 
-const PHONE = {
+const PHONE = {                                  // Object containing phone numbers for different test scenarios, can be set via environment variables or defaults to specific values
   ACTIVE:
-    process.env.TEST_PHONE ??
+    process.env.TEST_PHONE ??                   // Active phone number for testing successful microsite generation
     '8888888888',
 
   INACTIVE:
-    process.env.INACTIVE_BROKER_PHONE ??
+    process.env.INACTIVE_BROKER_PHONE ??      // Inactive broker phone number for testing failure scenarios
     '7777777777',
-
+      
   SUSPENDED:
-    process.env.SUSPENDED_ORG_PHONE ??
+    process.env.SUSPENDED_ORG_PHONE ??      // Suspended organization phone number for testing failure scenarios
     '6666666666',
 } as const;
 
@@ -30,7 +30,7 @@ const PHONE = {
 // TYPES
 // ======================================================
 
-interface MicrositeResponseBody {
+interface MicrositeResponseBody {           // interface defining the expected structure of the response body from the microsite generation API
   success: boolean;
   imageURL: string | null;
   micrositeUrl: string | null;
@@ -38,19 +38,19 @@ interface MicrositeResponseBody {
   buyerid?: string;
 }
 
-interface ExpectedFields {
+interface ExpectedFields {                  // interface defining the expected fields that can be validated in the response message, used for positive test cases to ensure correct parsing of buyer name and project name
   buyerName?: string;
   projectName?: string;
 }
 
-interface PositiveCase {
+interface PositiveCase {                    // interface defining the structure of a positive test case, including the name of the test case, the message body to be sent in the request, an optional flag to validate RNR status, and optional expected fields for validation in the response
   name: string;
   body: string;
   validateRNR?: boolean;
   expectedFields?: ExpectedFields;
 }
 
-interface NegativeCase {
+interface NegativeCase {                   // interface defining the structure of a negative test case, including the name of the test case and the message body to be sent in the request, which is expected to fail microsite generation
   name: string;
   body: string;
 }
@@ -59,7 +59,7 @@ interface NegativeCase {
 // UNIQUE BUYER ID
 // ======================================================
 
-function uniqueBuyerId() {
+function uniqueBuyerId() {                // function to generate a unique buyer ID for each test case, combining a timestamp and a random number to ensure uniqueness across test runs
 
   const timestamp =
     Date.now().toString().slice(-4);
@@ -67,25 +67,25 @@ function uniqueBuyerId() {
   const random =
     Math.floor(100 + Math.random() * 900);
 
-  return `AUTO${timestamp}${random}`;
+  return `${timestamp}${random}`;     // Returns a string in the format "AUTO" followed by the last 4 digits of the current timestamp and a random 3-digit number, ensuring a unique identifier for each test case
 }
 
 // ======================================================
 // HELPER
 // ======================================================
 
-async function sendMicrositeRequest(
+async function sendMicrositeRequest(    // helper function to send a POST request to the microsite generation API with the specified message body and phone number, and returns the response and parsed response body for further assertions in the test cases
   request: APIRequestContext,
   messageBody: string,
-  phone: string = PHONE.ACTIVE
-): Promise<{
-  response: Awaited<
+  phone: string = PHONE.ACTIVE          // defaults to the active phone number if not specified, allowing for testing different scenarios such as inactive broker or suspended organization by passing the respective phone numbers
+): Promise<{                           // The function returns a promise that resolves to an object containing the raw response from the API and the parsed response body, which can be used in assertions to validate the success or failure of microsite generation based on the input message and phone number
+  response: Awaited<                   // Awaited is a TypeScript utility type that resolves the type of a promise, ensuring that the response variable has the correct type based on the API request context's post method
     ReturnType<APIRequestContext['post']>
   >;
   responseBody: MicrositeResponseBody;
 }> {
 
-  const response = await request.post(
+  const response = await request.post(  // Sends a POST request to the specified API_URL with a JSON body containing the event type and data, which includes the phone number and message body. This simulates the incoming message that triggers microsite generation in the application.
     API_URL,
     {
       data: {
@@ -130,7 +130,7 @@ async function sendMicrositeRequest(
 // ASSERTIONS
 // ======================================================
 
-function assertSuccess(
+function assertSuccess(          // assertion function to validate that the microsite generation was successful based on the response body, checking that the success flag is true and that a microsite URL is present in the response
   body: MicrositeResponseBody
 ) {
 
@@ -166,19 +166,19 @@ function assertRNR(
 
 }
 
-function assertExpectedFields(
+function assertExpectedFields(   // assertion function to validate that the expected fields (buyer name and project name) are correctly parsed and included in the response message, iterating through the expected fields and checking that they are present in the message in a case-insensitive manner
   body: MicrositeResponseBody,
   fields?: ExpectedFields
 ) {
 
-  if (!fields) return;
+  if (!fields) return;   // If no expected fields are provided, skip the validation
 
   const message =
-    body.message.toLowerCase();
+    body.message.toLowerCase(); // Convert the response message to lowercase for case-insensitive comparison
 
   for (
     const value of
-    Object.values(fields)
+    Object.values(fields)   // Iterate through the values of the expected fields (buyer name and project name) and check if they are present in the response message, ensuring that the microsite generation logic correctly extracts and includes these details in the response
   ) {
 
     if (value) {
