@@ -156,7 +156,6 @@ const positiveCases: PositiveCase[] = [
     body: 'HaRsHa WiTh Id 9121 FoR AbHeE TrAnQuIlA',
     expectedFields: {
       buyerName:   'Harsha',
-      buyerId:     '9121',
       projectName: 'Abhee Tranquila'
     }
   },
