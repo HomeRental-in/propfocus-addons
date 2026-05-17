@@ -15,7 +15,7 @@ const API_URL =                                   // API endpoint for the micros
 const PHONE = {                                  // Object containing phone numbers for different test scenarios, can be set via environment variables or defaults to specific values
   ACTIVE:
     process.env.TEST_PHONE ??                   // Active phone number for testing successful microsite generation
-    '8888888888',
+    '9888898888',
 
   INACTIVE:
     process.env.INACTIVE_BROKER_PHONE ??      // Inactive broker phone number for testing failure scenarios
@@ -213,7 +213,7 @@ const positiveCases:
     }
   },
 
-  {
+  {    
     name: 'ALL CAPS Input',
     body:
       `HARSHA WITH ID ${uniqueBuyerId()} FOR ABHEE TRANQUILA`,
