@@ -35,10 +35,10 @@ const PHONE = {                                                    // object con
 // TYPES
 // ======================================================
 
-interface SiteVisitResponseBody {                                   // interface defining the expected structure of the response body from the site visit API
-  success:      boolean;
-  message:      string;
-  micrositeUrl?: string | null;
+interface SiteVisitResponseBody {
+  success: boolean;
+  message: string;
+  link_token?: string;
 }
 
 interface SiteVisitCase {                                           // interface defining the structure of a site visit test case, including name, message body, optional phone override, and optional expected fields
@@ -703,15 +703,15 @@ test(
     );
 
     expect(
-      first.responseBody
-        .micrositeUrl
-    ).toBe(
-      second.responseBody
-        .micrositeUrl
-    );
-
+  first.responseBody
+    .link_token
+).toBe(
+  second.responseBody
+    .link_token
+);
   }
 );
+
 
 // ======================================================
 // TC_SV_46 - PERFORMANCE TEST
@@ -749,4 +749,5 @@ test(
       .toBeLessThan(3000);
 
   }
+
 );
